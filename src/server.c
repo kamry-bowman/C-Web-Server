@@ -42,9 +42,11 @@
 #define SERVER_ROOT "./serverroot"
 
 struct thread_args {
-    int *fd;
+    int listenfd;
     struct cache *cache;
 };
+
+pthread_mutex_t cache_lock;
 
 /**
  * Send an HTTP response
@@ -137,7 +139,9 @@ int is_regular_file(const char *path)
 void get_file(int fd, struct cache *cache, char *request_path)
 {   
     // first, check cache
+    pthread_mutex_lock(&cache_lock);
     struct cache_entry * entry = cache_get(cache, request_path);
+    pthread_mutex_unlock(&cache_lock);
     if (entry) {
         send_response(fd, "HTTP/1.1 200 OK", entry->content_type, entry->content, entry->content_length);
     } else {
@@ -250,12 +254,8 @@ int find_content_length(char * req) {
 /**
  * Handle HTTP request and send response
  */
-void *handle_http_request(void * arg_ptr)
+void handle_http_request(int fd, struct cache * cache)
 {
-    struct thread_args *args = (struct thread_args *) arg_ptr;
-    int fd = *args->fd;
-    struct cache *cache = args->cache;
-
     const int request_buffer_size = 65536; // 64K
     char request[request_buffer_size];
 
@@ -264,7 +264,7 @@ void *handle_http_request(void * arg_ptr)
 
     if (bytes_recvd < 0) {
         perror("recv");
-        return NULL;
+        return;
     }
 
     // GET /example HTTP/1.1
@@ -298,18 +298,50 @@ void *handle_http_request(void * arg_ptr)
             send_response(fd, "500 Internal Server Error", "text/plain", message, strlen(message));
         }
     }
-    return NULL;
 }
+
+void * server_thread(void * arg_ptr) {
+
+        struct thread_args *args = (struct thread_args *) arg_ptr;
+        int listenfd = args->listenfd;
+        struct cache *cache = args->cache;
+
+        struct sockaddr_storage their_addr; // connector's address information
+        char s[INET6_ADDRSTRLEN];
+        int newfd;
+
+        while(1) {
+            socklen_t sin_size = sizeof their_addr;
+
+            // Parent process will block on the accept() call until someone
+            // makes a new connection:
+            newfd = accept(listenfd, (struct sockaddr *)&their_addr, &sin_size);
+            if (newfd == -1) {
+                perror("accept");
+                continue;
+            }
+
+            // Print out a message that we got the connection
+            inet_ntop(their_addr.ss_family,
+                get_in_addr((struct sockaddr *)&their_addr),
+                s, sizeof s);
+            printf("server: got connection from %s\n", s);
+            
+            // newfd is a new socket descriptor for the new connection.
+            // listenfd is still listening for new connections.
+
+            handle_http_request(newfd, cache);
+
+            close(newfd);
+    }
+}
+
  
 /**
  * Main
  */
 int main(void)
 {
-    int newfd;  // listen on sock_fd, new connection on newfd
-    struct sockaddr_storage their_addr; // connector's address information
-    char s[INET6_ADDRSTRLEN];
-
     struct cache *cache = cache_create(10, 0);
 
     // Get a listening socket
@@ -326,37 +358,19 @@ int main(void)
     // forks a handler process to take care of it. The main parent
     // process then goes back to waiting for new connections.
     
-    while(1) {
-        socklen_t sin_size = sizeof their_addr;
-
-        // Parent process will block on the accept() call until someone
-        // makes a new connection:
-        newfd = accept(listenfd, (struct sockaddr *)&their_addr, &sin_size);
-        if (newfd == -1) {
-            perror("accept");
-            continue;
-        }
-
-        // Print out a message that we got the connection
-        inet_ntop(their_addr.ss_family,
-            get_in_addr((struct sockaddr *)&their_addr),
-            s, sizeof s);
-        printf("server: got connection from %s\n", s);
-        
-        // newfd is a new socket descriptor for the new connection.
-        // listenfd is still listening for new connections.
+    for (int i = 0; i < 4; i++) {
         pthread_t thread_id;
         struct thread_args* th_args = malloc(sizeof(struct thread_args));
-        th_args->fd = &newfd;
+        th_args->listenfd = listenfd;
         th_args->cache = cache;
 
-        pthread_create(&thread_id, NULL, &handle_http_request, th_args);
-
-        
+        pthread_create(&thread_id, NULL, server_thread, th_args);
     }
 
-    // Unreachable code
-
+    for (;;) {
+        // maintain threads here
+    }
     return 0;
+
 }
 
