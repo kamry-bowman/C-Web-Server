@@ -153,17 +153,69 @@ void get_file(int fd, struct cache *cache, char *request_path)
 }
 
 /**
+ * Read and return a file from disk or cache
+ */
+int save_file(char *request_path, char* body, int content_length)
+{   
+    char * root = "serverroot";
+    int full_path_len = strlen(root) + strlen(request_path);
+    char full_path[full_path_len + 1];
+    strcpy(full_path, root);
+    strcat(full_path, request_path);
+
+    int f = open(full_path, O_WRONLY | O_CREAT);
+    if (f < 0) {
+        return 1;
+    } else {
+        int res = write(f, body, content_length);
+        close(f);
+        if (res < 0) {
+            return 1;
+        } else {
+            return 0;
+        }
+    }
+}
+
+/**
  * Search for the end of the HTTP header
  * 
  * "Newlines" in HTTP can be \r\n (carriage return followed by newline) or \n
  * (newline) or \r (carriage return).
  */
-// char *find_start_of_body(char *header)
-// {
-//     ///////////////////
-//     // IMPLEMENT ME! // (Stretch)
-//     ///////////////////
-// }
+char *find_start_of_body(char *header)
+{
+    char *ptr = header;
+    int found = 0;
+    while (*ptr != 0) {
+        int lf2 = (ptr[0] == '\n' && ptr[1] == '\n');
+        int crlf2 = (ptr[0] == '\r' && ptr[1] == '\n' && ptr[2] == '\r' && ptr[3] == '\n');
+
+        if (lf2) {
+            found = 1;
+            ptr+=2;
+            break;
+        }
+        if (crlf2) {
+            found = 1;
+            ptr+=4;
+            break;
+        }
+        ptr++;
+    }
+    if (found) {
+        return ptr;
+    }
+    return NULL;
+}
+
+int find_content_length(char * req) {
+    int i;
+    char * header = strstr(req, "Content-Length: ");
+    sscanf(header, "Content-Length: %d", &i);
+    return i;
+}
+
 
 /**
  * Handle HTTP request and send response
@@ -201,13 +253,17 @@ void handle_http_request(int fd, struct cache *cache)
       } else {
         get_file(fd, cache, path);
       }
+    } else if (strcmp(method, "POST") == 0) {
+        if (save_file(path, find_start_of_body(request), find_content_length(request)) == 0) {
+            // success
+            char * message = "Created file";
+            send_response(fd, "201 Created", "text/plain", message, strlen(message));
+        } else {
+            // error
+            char * message = "Creation failed.";
+            send_response(fd, "500 Internal Server Error", "text/plain", message, strlen(message));
+        }
     }
-
-    //    Check if it's /d20 and handle that special case
-    //    Otherwise serve the requested file by calling get_file()
-
-
-    // (Stretch) If POST, handle the post request
 }
 
 /**
