@@ -19,9 +19,10 @@ struct cache_entry *alloc_entry(char *path, char *content_type, void *content, i
  */
 void free_entry(struct cache_entry *entry)
 {
-    ///////////////////
-    // IMPLEMENT ME! //
-    ///////////////////
+    free(entry->content);
+    free(entry->content_type);
+    free(entry->path);
+    free(entry);
 }
 
 /**
@@ -120,11 +121,47 @@ void cache_free(struct cache *cache)
  * 
  * NOTE: doesn't check for duplicate cache entries
  */
+// struct cache_entry {
+//     char *path;   // Endpoint path--key to the cache
+//     char *content_type;
+//     int content_length;
+//     void *content;
+
+//     struct cache_entry *prev, *next; // Doubly-linked list
+// };
+
+// // A cache
+// struct cache {
+//     struct hashtable *index;
+//     struct cache_entry *head, *tail; // Doubly-linked list
+//     int max_size; // Maxiumum number of entries
+//     int cur_size; // Current number of entries
+// };
 void cache_put(struct cache *cache, char *path, char *content_type, void *content, int content_length)
 {
-    ///////////////////
-    // IMPLEMENT ME! //
-    ///////////////////
+  struct cache_entry * entry = malloc(sizeof(struct cache_entry));
+  entry->path = strdup(path);
+  entry->content_type = strdup(content_type);
+  entry->content_length = content_length;
+  entry->content = strdup(content);
+
+  // store in doubly linked list
+  struct cache_entry *prior_head = cache->head;
+  dllist_insert_head(cache, entry);
+
+  // add entry to hash_table
+  hashtable_put(cache->index, entry->path, entry);
+
+  // if at capacity, delete oldest cache item
+  if (cache->cur_size == cache->max_size) {
+    struct cache_entry *prior_tail = dllist_remove_tail(cache);
+    hashtable_delete(cache->index, prior_tail->path);
+    free_entry(prior_tail);
+  } else {
+    // else, update cache size
+    cache->cur_size++;
+  }
+
 }
 
 /**
@@ -132,7 +169,12 @@ void cache_put(struct cache *cache, char *path, char *content_type, void *conten
  */
 struct cache_entry *cache_get(struct cache *cache, char *path)
 {
-    ///////////////////
-    // IMPLEMENT ME! //
-    ///////////////////
+  struct cache_entry * entry = hashtable_get(cache->index, path);
+  if (!entry) {
+    return NULL;
+  }
+
+  // add entry to front of list
+  dllist_move_to_head(cache, entry);
+  return entry;
 }

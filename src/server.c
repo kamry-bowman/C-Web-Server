@@ -122,25 +122,33 @@ void resp_404(int fd)
  */
 void get_file(int fd, struct cache *cache, char *request_path)
 {   
-    char * root = "serverroot";
-    int full_path_len = strlen(root) + strlen(request_path);
-    char full_path[full_path_len + 1];
-    strcpy(full_path, root);
-    strcat(full_path, request_path);
-    printf("full_path: %s\n", full_path);
-    FILE *fp = fopen(full_path, "r");
-    if (!fp) {
-        resp_404(fd);
+    // first, check cache
+    struct cache_entry * entry = cache_get(cache, path);
+    if (entry) {
+        send_response(fd, "HTTP/1.1 200 OK", entry->content_type, entry->content, entry->content_length);
     } else {
-        fseek(fp, 0, SEEK_END);
-        long fsize = ftell(fp);
-        fseek(fp, 0, SEEK_SET);
+        char * root = "serverroot";
+        int full_path_len = strlen(root) + strlen(request_path);
+        char full_path[full_path_len + 1];
+        strcpy(full_path, root);
+        strcat(full_path, request_path);
+        printf("full_path: %s\n", full_path);
+        FILE *fp = fopen(full_path, "r");
+        if (!fp) {
+            resp_404(fd);
+        } else {
+            fseek(fp, 0, SEEK_END);
+            long fsize = ftell(fp);
+            fseek(fp, 0, SEEK_SET);
 
-        unsigned char buff[fsize];
-        fread(buff, 1, fsize, fp);
-        fclose(fp);
-        printf("size: %ld, buffer: %s\n", fsize, buff);
-        send_response(fd, "HTTP/1.1 200 OK", mime_type_get(request_path), buff, fsize);
+            unsigned char buff[fsize];
+            unsigned char content_type[1024] = mime_type_get(request_path);
+            fread(buff, 1, fsize, fp);
+            fclose(fp);
+            printf("size: %ld, buffer: %s\n", fsize, buff);
+            send_response(fd, "HTTP/1.1 200 OK", content_type, buff, fsize);
+            cache_put(cache, path, buff, fsize);
+        }
     }
 }
 
