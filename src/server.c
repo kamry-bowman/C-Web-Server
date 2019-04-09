@@ -33,6 +33,7 @@
 #include "file.h"
 #include "mime.h"
 #include "cache.h"
+#include <sys/stat.h>
 
 #define PORT "3490"  // the port users will be connecting to
 
@@ -117,6 +118,13 @@ void resp_404(int fd)
     file_free(filedata);
 }
 
+int is_regular_file(const char *path)
+{
+    struct stat path_stat;
+    stat(path, &path_stat);
+    return S_ISREG(path_stat.st_mode);
+}
+
 /**
  * Read and return a file from disk or cache
  */
@@ -133,21 +141,32 @@ void get_file(int fd, struct cache *cache, char *request_path)
         strcpy(full_path, root);
         strcat(full_path, request_path);
         printf("full_path: %s\n", full_path);
-        FILE *fp = fopen(full_path, "r");
-        if (!fp) {
-            resp_404(fd);
+        FILE *fp;
+        char * content_type;
+        if (!is_regular_file(full_path)) {
+            char * index = "index.html";
+            char alt_path[full_path_len + strlen(index) + 1];
+            strcpy(alt_path, full_path);
+            strcat(alt_path, index);
+            fp = fopen(alt_path, "r");
+            content_type = mime_type_get(alt_path);
         } else {
+            fp = fopen(full_path, "r");
+            content_type = mime_type_get(full_path);
+            }
+        if (fp) {
             fseek(fp, 0, SEEK_END);
             int fsize = ftell(fp);
             fseek(fp, 0, SEEK_SET);
 
             char * buff = malloc(fsize);
-            char * content_type = mime_type_get(request_path);
             fread(buff, 1, fsize, fp);
             fclose(fp);
             printf("size: %d, buffer: %s\n", fsize, buff);
             send_response(fd, "HTTP/1.1 200 OK", content_type, buff, fsize);
             cache_put(cache, request_path, content_type, buff, fsize);
+        } else {
+            resp_404(fd);
         }
     }
 }
