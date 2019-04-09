@@ -123,7 +123,7 @@ void resp_404(int fd)
 void get_file(int fd, struct cache *cache, char *request_path)
 {   
     // first, check cache
-    struct cache_entry * entry = cache_get(cache, path);
+    struct cache_entry * entry = cache_get(cache, request_path);
     if (entry) {
         send_response(fd, "HTTP/1.1 200 OK", entry->content_type, entry->content, entry->content_length);
     } else {
@@ -138,16 +138,16 @@ void get_file(int fd, struct cache *cache, char *request_path)
             resp_404(fd);
         } else {
             fseek(fp, 0, SEEK_END);
-            long fsize = ftell(fp);
+            int fsize = ftell(fp);
             fseek(fp, 0, SEEK_SET);
 
-            unsigned char buff[fsize];
-            unsigned char content_type[1024] = mime_type_get(request_path);
+            char * buff = malloc(fsize);
+            char * content_type = mime_type_get(request_path);
             fread(buff, 1, fsize, fp);
             fclose(fp);
-            printf("size: %ld, buffer: %s\n", fsize, buff);
+            printf("size: %d, buffer: %s\n", fsize, buff);
             send_response(fd, "HTTP/1.1 200 OK", content_type, buff, fsize);
-            cache_put(cache, path, buff, fsize);
+            cache_put(cache, request_path, content_type, buff, fsize);
         }
     }
 }
