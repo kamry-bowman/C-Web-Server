@@ -144,7 +144,12 @@ void get_file(int fd, struct cache *cache, char *request_path)
         FILE *fp;
         char * content_type;
         if (!is_regular_file(full_path)) {
-            char * index = "index.html";
+            char * index;
+            if (full_path[full_path_len] == '/') {
+                index = "index.html";
+            } else {
+                index = "/index.html";
+            }
             char alt_path[full_path_len + strlen(index) + 1];
             strcpy(alt_path, full_path);
             strcat(alt_path, index);
