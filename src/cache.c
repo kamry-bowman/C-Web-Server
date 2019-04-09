@@ -9,9 +9,12 @@
  */
 struct cache_entry *alloc_entry(char *path, char *content_type, void *content, int content_length)
 {
-    ///////////////////
-    // IMPLEMENT ME! //
-    ///////////////////
+  struct cache_entry * entry = malloc(sizeof(struct cache_entry));
+  entry->path = strdup(path);
+  entry->content_type = strdup(content_type);
+  entry->content_length = content_length;
+  entry->content = strdup(content);
+  return entry;
 }
 
 /**
@@ -40,6 +43,7 @@ void dllist_insert_head(struct cache *cache, struct cache_entry *ce)
         ce->prev = NULL;
         cache->head = ce;
     }
+    cache->cur_size++;
 }
 
 /**
@@ -92,9 +96,13 @@ struct cache_entry *dllist_remove_tail(struct cache *cache)
  */
 struct cache *cache_create(int max_size, int hashsize)
 {
-    ///////////////////
-    // IMPLEMENT ME! //
-    ///////////////////
+  struct cache *cache = malloc(sizeof(struct cache));
+  cache->index = hashtable_create(max_size, NULL);
+  cache->max_size = max_size;
+  cache->cur_size = 0;
+  cache->head = NULL;
+  cache->tail = NULL;
+  return cache;
 }
 
 void cache_free(struct cache *cache)
@@ -139,28 +147,24 @@ void cache_free(struct cache *cache)
 // };
 void cache_put(struct cache *cache, char *path, char *content_type, void *content, int content_length)
 {
-  struct cache_entry * entry = malloc(sizeof(struct cache_entry));
-  entry->path = strdup(path);
-  entry->content_type = strdup(content_type);
-  entry->content_length = content_length;
-  entry->content = strdup(content);
+  struct cache_entry * entry = alloc_entry(path, content_type, content, content_length);
 
   // store in doubly linked list
-  struct cache_entry *prior_head = cache->head;
   dllist_insert_head(cache, entry);
 
   // add entry to hash_table
   hashtable_put(cache->index, entry->path, entry);
 
+
   // if at capacity, delete oldest cache item
-  if (cache->cur_size == cache->max_size) {
+  if (cache->cur_size > cache->max_size) {
     struct cache_entry *prior_tail = dllist_remove_tail(cache);
     hashtable_delete(cache->index, prior_tail->path);
     free_entry(prior_tail);
   } else {
     // else, update cache size
-    cache->cur_size++;
   }
+  printf("current_size: %d\n", cache->cur_size);
 
 }
 
