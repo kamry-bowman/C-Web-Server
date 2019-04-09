@@ -34,11 +34,17 @@
 #include "mime.h"
 #include "cache.h"
 #include <sys/stat.h>
+#include <pthread.h>
 
 #define PORT "3490"  // the port users will be connecting to
 
 #define SERVER_FILES "./serverfiles"
 #define SERVER_ROOT "./serverroot"
+
+struct thread_args {
+    int *fd;
+    struct cache *cache;
+};
 
 /**
  * Send an HTTP response
@@ -244,8 +250,12 @@ int find_content_length(char * req) {
 /**
  * Handle HTTP request and send response
  */
-void handle_http_request(int fd, struct cache *cache)
+void *handle_http_request(void * arg_ptr)
 {
+    struct thread_args *args = (struct thread_args *) arg_ptr;
+    int fd = *args->fd;
+    struct cache *cache = args->cache;
+
     const int request_buffer_size = 65536; // 64K
     char request[request_buffer_size];
 
@@ -254,7 +264,7 @@ void handle_http_request(int fd, struct cache *cache)
 
     if (bytes_recvd < 0) {
         perror("recv");
-        return;
+        return NULL;
     }
 
     // GET /example HTTP/1.1
@@ -288,8 +298,9 @@ void handle_http_request(int fd, struct cache *cache)
             send_response(fd, "500 Internal Server Error", "text/plain", message, strlen(message));
         }
     }
+    return NULL;
 }
-
+ 
 /**
  * Main
  */
@@ -334,10 +345,14 @@ int main(void)
         
         // newfd is a new socket descriptor for the new connection.
         // listenfd is still listening for new connections.
+        pthread_t thread_id;
+        struct thread_args* th_args = malloc(sizeof(struct thread_args));
+        th_args->fd = &newfd;
+        th_args->cache = cache;
 
-        handle_http_request(newfd, cache);
+        pthread_create(&thread_id, NULL, &handle_http_request, th_args);
 
-        close(newfd);
+        
     }
 
     // Unreachable code
