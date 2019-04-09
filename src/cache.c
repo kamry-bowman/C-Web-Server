@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "hashtable.h"
 #include "cache.h"
 
@@ -15,6 +16,7 @@ struct cache_entry *alloc_entry(char *path, char *content_type, void *content, i
   entry->content_length = content_length;
   entry->content = malloc(content_length);
   memcpy(entry->content, content, content_length);
+  entry->created_at = time(NULL);
   return entry;
 }
 
@@ -172,10 +174,35 @@ void cache_put(struct cache *cache, char *path, char *content_type, void *conten
 /**
  * Retrieve an entry from the cache
  */
+void cache_delete(struct cache *cache, struct cache_entry *entry)
+{
+  hashtable_delete(cache->index, entry->path);
+
+  dllist_move_to_head(cache, entry);
+  
+  if(entry->next) {
+    entry->next->prev = NULL;
+    cache->head = entry->next;
+  } else {
+    cache->head = NULL;
+  }
+  free_entry(entry);
+  cache->cur_size--;
+}
+
+/**
+ * Retrieve an entry from the cache
+ */
 struct cache_entry *cache_get(struct cache *cache, char *path)
 {
   struct cache_entry * entry = hashtable_get(cache->index, path);
   if (!entry) {
+    return NULL;
+  }
+
+  // check if cache entry has expired
+  if (entry->created_at < time(NULL) - 60) {
+    cache_delete(cache, entry);
     return NULL;
   }
 
