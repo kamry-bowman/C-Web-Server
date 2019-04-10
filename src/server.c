@@ -33,11 +33,20 @@
 #include "file.h"
 #include "mime.h"
 #include "cache.h"
+#include <sys/stat.h>
+#include <pthread.h>
 
 #define PORT "3490"  // the port users will be connecting to
 
 #define SERVER_FILES "./serverfiles"
 #define SERVER_ROOT "./serverroot"
+
+struct thread_args {
+    int listenfd;
+    struct cache *cache;
+};
+
+pthread_mutex_t cache_lock;
 
 /**
  * Send an HTTP response
@@ -53,14 +62,22 @@ int send_response(int fd, char *header, char *content_type, void *body, int cont
     const int max_response_size = 262144;
     char response[max_response_size];
 
+    // get current time
+    time_t rawtime;
+    time(&rawtime);
+
     // Build HTTP response and store it in response
+    int header_length = sprintf(response,
+      "%s\r\n"
+      "Connection: close\r\n"
+      "Content-Length: %d\r\n"
+      "Content-Type: %s\r\n"
+      "Date: %s\r\n",
+      header, content_length, content_type, asctime(localtime(&rawtime)));
+    
+    memcpy(response + header_length, body, content_length);
 
-    ///////////////////
-    // IMPLEMENT ME! //
-    ///////////////////
-
-    // Send it all!
-    int rv = send(fd, response, response_length, 0);
+    int rv = send(fd, response, header_length + content_length, 0);
 
     if (rv < 0) {
         perror("send");
@@ -76,16 +93,11 @@ int send_response(int fd, char *header, char *content_type, void *body, int cont
 void get_d20(int fd)
 {
     // Generate a random number between 1 and 20 inclusive
-    
-    ///////////////////
-    // IMPLEMENT ME! //
-    ///////////////////
-
-    // Use send_response() to send it back as text/plain data
-
-    ///////////////////
-    // IMPLEMENT ME! //
-    ///////////////////
+    srand(time(NULL)); 
+    int r = rand() % 21;
+    char num_str[3];
+    sprintf(num_str, "%d", r);
+    send_response(fd, "HTTP/1.1 200 OK", "text/plain", num_str, (int) strlen(num_str));
 }
 
 /**
@@ -114,14 +126,89 @@ void resp_404(int fd)
     file_free(filedata);
 }
 
+int is_regular_file(const char *path)
+{
+    struct stat path_stat;
+    stat(path, &path_stat);
+    return S_ISREG(path_stat.st_mode);
+}
+
 /**
  * Read and return a file from disk or cache
  */
 void get_file(int fd, struct cache *cache, char *request_path)
-{
-    ///////////////////
-    // IMPLEMENT ME! //
-    ///////////////////
+{   
+    // first, check cache
+    pthread_mutex_lock(&cache_lock);
+    struct cache_entry * entry = cache_get(cache, request_path);
+    pthread_mutex_unlock(&cache_lock);
+    if (entry) {
+        send_response(fd, "HTTP/1.1 200 OK", entry->content_type, entry->content, entry->content_length);
+    } else {
+        char * root = "serverroot";
+        int full_path_len = strlen(root) + strlen(request_path);
+        char full_path[full_path_len + 1];
+        strcpy(full_path, root);
+        strcat(full_path, request_path);
+        printf("full_path: %s\n", full_path);
+        FILE *fp;
+        char * content_type;
+        if (!is_regular_file(full_path)) {
+            char * index;
+            if (full_path[full_path_len] == '/') {
+                index = "index.html";
+            } else {
+                index = "/index.html";
+            }
+            char alt_path[full_path_len + strlen(index) + 1];
+            strcpy(alt_path, full_path);
+            strcat(alt_path, index);
+            fp = fopen(alt_path, "r");
+            content_type = mime_type_get(alt_path);
+        } else {
+            fp = fopen(full_path, "r");
+            content_type = mime_type_get(full_path);
+            }
+        if (fp) {
+            fseek(fp, 0, SEEK_END);
+            int fsize = ftell(fp);
+            fseek(fp, 0, SEEK_SET);
+
+            char * buff = malloc(fsize);
+            fread(buff, 1, fsize, fp);
+            fclose(fp);
+            printf("size: %d, buffer: %s\n", fsize, buff);
+            send_response(fd, "HTTP/1.1 200 OK", content_type, buff, fsize);
+            cache_put(cache, request_path, content_type, buff, fsize);
+        } else {
+            resp_404(fd);
+        }
+    }
+}
+
+/**
+ * Read and return a file from disk or cache
+ */
+int save_file(char *request_path, char* body, int content_length)
+{   
+    char * root = "serverroot";
+    int full_path_len = strlen(root) + strlen(request_path);
+    char full_path[full_path_len + 1];
+    strcpy(full_path, root);
+    strcat(full_path, request_path);
+
+    int f = open(full_path, O_WRONLY | O_CREAT);
+    if (f < 0) {
+        return 1;
+    } else {
+        int res = write(f, body, content_length);
+        close(f);
+        if (res < 0) {
+            return 1;
+        } else {
+            return 0;
+        }
+    }
 }
 
 /**
@@ -132,15 +219,42 @@ void get_file(int fd, struct cache *cache, char *request_path)
  */
 char *find_start_of_body(char *header)
 {
-    ///////////////////
-    // IMPLEMENT ME! // (Stretch)
-    ///////////////////
+    char *ptr = header;
+    int found = 0;
+    while (*ptr != 0) {
+        int lf2 = (ptr[0] == '\n' && ptr[1] == '\n');
+        int crlf2 = (ptr[0] == '\r' && ptr[1] == '\n' && ptr[2] == '\r' && ptr[3] == '\n');
+
+        if (lf2) {
+            found = 1;
+            ptr+=2;
+            break;
+        }
+        if (crlf2) {
+            found = 1;
+            ptr+=4;
+            break;
+        }
+        ptr++;
+    }
+    if (found) {
+        return ptr;
+    }
+    return NULL;
 }
+
+int find_content_length(char * req) {
+    int i;
+    char * header = strstr(req, "Content-Length: ");
+    sscanf(header, "Content-Length: %d", &i);
+    return i;
+}
+
 
 /**
  * Handle HTTP request and send response
  */
-void handle_http_request(int fd, struct cache *cache)
+void handle_http_request(int fd, struct cache * cache)
 {
     const int request_buffer_size = 65536; // 64K
     char request[request_buffer_size];
@@ -153,31 +267,81 @@ void handle_http_request(int fd, struct cache *cache)
         return;
     }
 
-
-    ///////////////////
-    // IMPLEMENT ME! //
-    ///////////////////
+    // GET /example HTTP/1.1
+    // Host: lambdaschool.com
+    char method[5];
+    char path[1024];
+    char host[1024];
+    // printf("received: %s", request);
+    sscanf(request, "%s %s HTTP/1.1\r\n Host: %s", method, path, host);
+    // printf("method: %s\n", method);
+    // printf("path: %s\n", path);
+    // printf("host: %s\n", host);
 
     // Read the three components of the first request line
 
     // If GET, handle the get endpoints
-
-    //    Check if it's /d20 and handle that special case
-    //    Otherwise serve the requested file by calling get_file()
-
-
-    // (Stretch) If POST, handle the post request
+    if (strcmp(method, "GET") == 0) {
+      if (strcmp(path, "/d20") == 0) {
+        get_d20(fd);
+      } else {
+        get_file(fd, cache, path);
+      }
+    } else if (strcmp(method, "POST") == 0) {
+        if (save_file(path, find_start_of_body(request), find_content_length(request)) == 0) {
+            // success
+            char * message = "Created file";
+            send_response(fd, "201 Created", "text/plain", message, strlen(message));
+        } else {
+            // error
+            char * message = "Creation failed.";
+            send_response(fd, "500 Internal Server Error", "text/plain", message, strlen(message));
+        }
+    }
 }
 
+void * server_thread(void * arg_ptr) {
+
+        struct thread_args *args = (struct thread_args *) arg_ptr;
+        int listenfd = args->listenfd;
+        struct cache *cache = args->cache;
+
+        struct sockaddr_storage their_addr; // connector's address information
+        char s[INET6_ADDRSTRLEN];
+        int newfd;
+
+        while(1) {
+            socklen_t sin_size = sizeof their_addr;
+
+            // Parent process will block on the accept() call until someone
+            // makes a new connection:
+            newfd = accept(listenfd, (struct sockaddr *)&their_addr, &sin_size);
+            if (newfd == -1) {
+                perror("accept");
+                continue;
+            }
+
+            // Print out a message that we got the connection
+            inet_ntop(their_addr.ss_family,
+                get_in_addr((struct sockaddr *)&their_addr),
+                s, sizeof s);
+            printf("server: got connection from %s\n", s);
+            
+            // newfd is a new socket descriptor for the new connection.
+            // listenfd is still listening for new connections.
+
+            handle_http_request(newfd, cache);
+
+            close(newfd);
+    }
+}
+
+ 
 /**
  * Main
  */
 int main(void)
 {
-    int newfd;  // listen on sock_fd, new connection on newfd
-    struct sockaddr_storage their_addr; // connector's address information
-    char s[INET6_ADDRSTRLEN];
-
     struct cache *cache = cache_create(10, 0);
 
     // Get a listening socket
@@ -194,33 +358,19 @@ int main(void)
     // forks a handler process to take care of it. The main parent
     // process then goes back to waiting for new connections.
     
-    while(1) {
-        socklen_t sin_size = sizeof their_addr;
+    for (int i = 0; i < 4; i++) {
+        pthread_t thread_id;
+        struct thread_args* th_args = malloc(sizeof(struct thread_args));
+        th_args->listenfd = listenfd;
+        th_args->cache = cache;
 
-        // Parent process will block on the accept() call until someone
-        // makes a new connection:
-        newfd = accept(listenfd, (struct sockaddr *)&their_addr, &sin_size);
-        if (newfd == -1) {
-            perror("accept");
-            continue;
-        }
-
-        // Print out a message that we got the connection
-        inet_ntop(their_addr.ss_family,
-            get_in_addr((struct sockaddr *)&their_addr),
-            s, sizeof s);
-        printf("server: got connection from %s\n", s);
-        
-        // newfd is a new socket descriptor for the new connection.
-        // listenfd is still listening for new connections.
-
-        handle_http_request(newfd, cache);
-
-        close(newfd);
+        pthread_create(&thread_id, NULL, server_thread, th_args);
     }
 
-    // Unreachable code
-
+    for (;;) {
+        // maintain threads here
+    }
     return 0;
+
 }
 

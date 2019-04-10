@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "hashtable.h"
 #include "cache.h"
 
@@ -9,9 +10,14 @@
  */
 struct cache_entry *alloc_entry(char *path, char *content_type, void *content, int content_length)
 {
-    ///////////////////
-    // IMPLEMENT ME! //
-    ///////////////////
+  struct cache_entry * entry = malloc(sizeof(struct cache_entry));
+  entry->path = strdup(path);
+  entry->content_type = strdup(content_type);
+  entry->content_length = content_length;
+  entry->content = malloc(content_length);
+  memcpy(entry->content, content, content_length);
+  entry->created_at = time(NULL);
+  return entry;
 }
 
 /**
@@ -19,9 +25,10 @@ struct cache_entry *alloc_entry(char *path, char *content_type, void *content, i
  */
 void free_entry(struct cache_entry *entry)
 {
-    ///////////////////
-    // IMPLEMENT ME! //
-    ///////////////////
+    free(entry->content);
+    free(entry->content_type);
+    free(entry->path);
+    free(entry);
 }
 
 /**
@@ -39,6 +46,7 @@ void dllist_insert_head(struct cache *cache, struct cache_entry *ce)
         ce->prev = NULL;
         cache->head = ce;
     }
+    cache->cur_size++;
 }
 
 /**
@@ -91,9 +99,13 @@ struct cache_entry *dllist_remove_tail(struct cache *cache)
  */
 struct cache *cache_create(int max_size, int hashsize)
 {
-    ///////////////////
-    // IMPLEMENT ME! //
-    ///////////////////
+  struct cache *cache = malloc(sizeof(struct cache));
+  cache->index = hashtable_create(max_size, NULL);
+  cache->max_size = max_size;
+  cache->cur_size = 0;
+  cache->head = NULL;
+  cache->tail = NULL;
+  return cache;
 }
 
 void cache_free(struct cache *cache)
@@ -120,11 +132,62 @@ void cache_free(struct cache *cache)
  * 
  * NOTE: doesn't check for duplicate cache entries
  */
+// struct cache_entry {
+//     char *path;   // Endpoint path--key to the cache
+//     char *content_type;
+//     int content_length;
+//     void *content;
+
+//     struct cache_entry *prev, *next; // Doubly-linked list
+// };
+
+// // A cache
+// struct cache {
+//     struct hashtable *index;
+//     struct cache_entry *head, *tail; // Doubly-linked list
+//     int max_size; // Maxiumum number of entries
+//     int cur_size; // Current number of entries
+// };
 void cache_put(struct cache *cache, char *path, char *content_type, void *content, int content_length)
 {
-    ///////////////////
-    // IMPLEMENT ME! //
-    ///////////////////
+  struct cache_entry * entry = alloc_entry(path, content_type, content, content_length);
+
+  // store in doubly linked list
+  dllist_insert_head(cache, entry);
+
+  // add entry to hash_table
+  hashtable_put(cache->index, entry->path, entry);
+
+
+  // if at capacity, delete oldest cache item
+  if (cache->cur_size > cache->max_size) {
+    struct cache_entry *prior_tail = dllist_remove_tail(cache);
+    hashtable_delete(cache->index, prior_tail->path);
+    free_entry(prior_tail);
+  } else {
+    // else, update cache size
+  }
+  printf("current_size: %d\n", cache->cur_size);
+
+}
+
+/**
+ * Retrieve an entry from the cache
+ */
+void cache_delete(struct cache *cache, struct cache_entry *entry)
+{
+  hashtable_delete(cache->index, entry->path);
+
+  dllist_move_to_head(cache, entry);
+  
+  if(entry->next) {
+    entry->next->prev = NULL;
+    cache->head = entry->next;
+  } else {
+    cache->head = NULL;
+  }
+  free_entry(entry);
+  cache->cur_size--;
 }
 
 /**
@@ -132,7 +195,18 @@ void cache_put(struct cache *cache, char *path, char *content_type, void *conten
  */
 struct cache_entry *cache_get(struct cache *cache, char *path)
 {
-    ///////////////////
-    // IMPLEMENT ME! //
-    ///////////////////
+  struct cache_entry * entry = hashtable_get(cache->index, path);
+  if (!entry) {
+    return NULL;
+  }
+
+  // check if cache entry has expired
+  if (entry->created_at < time(NULL) - 60) {
+    cache_delete(cache, entry);
+    return NULL;
+  }
+
+  // add entry to front of list
+  dllist_move_to_head(cache, entry);
+  return entry;
 }
